@@ -44,14 +44,14 @@ def df_value_counts(df):
     cat_cols = [col for col in df.columns if col not in num_cols]
     
     print('DataFrame value counts: ')
-    print('=====================================================')
+    print('------------------------------------------')
     print('')
     for col in df.columns:
         if col in cat_cols:
             print(df[col].value_counts())
         else:
             print(df[col].value_counts(bins=10, sort=False))
-            print('=====================================================')
+            print('-------------------------------------------')
             print('')
 
 ############################## Histogram DF function #########################
