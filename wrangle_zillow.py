@@ -9,6 +9,8 @@ import matplotlib.pyplot as plt
 from scipy import stats
 from sklearn.model_selection import train_test_split
 
+from env import host, user, password
+
 
 
 ############################## Function File ###############################
@@ -182,12 +184,6 @@ def prepare_zillow(df):
     # dropping the columns with 17K missing values too much to fill/impute/drop rows
     df = df.drop(columns=['heatingorsystemtypeid', 'buildingqualitytypeid', 'unitcnt'])
     
-    # imputing descreet columns with most frequent value
-    df = impute(df, 'most_frequent', ['calculatedbathnbr', 'fullbathcnt', 'regionidcity', 'regionidzip', 'yearbuilt', 'censustractandblock'])
-    
-    # imputing continuous columns with median value
-    df = impute(df, 'median', ['finishedsquarefeet12', 'lotsizesquarefeet', 'structuretaxvaluedollarcnt', 'taxvaluedollarcnt', 'landtaxvaluedollarcnt', 'taxamount'])
-    
     return df
 
 ############################## Train/Validate/Split Function #########################
@@ -200,3 +196,124 @@ def train_validate_test_split(df):
     train, validate = train_test_split(train, test_size=.3, random_state=123)
     
     return train, validate, test
+
+
+
+################################# SQL connect Function ##############################
+
+
+def sql_connect(db, user=user, host=host, password=password):
+    '''
+    This function allows me to connect the Codeup database to pull SQL tables
+    Using private information from my env.py file.
+    '''
+    return f'mysql+pymysql://{user}:{password}@{host}/{db}'
+    
+
+####################### Acquire Zillow Database Function ##########################
+
+
+def acquire_zillow():
+    ''' 
+    This function acquires the zillow database from SQL into Pandas and filters the data
+    according to the project scope of 2017 purchased properties and the most recent transactions
+    to avoid duplicates
+    '''
+    
+    sql_query = '''
+    select * 
+    from predictions_2017
+    left join properties_2017 using(parcelid)
+    left join airconditioningtype using(airconditioningtypeid)
+    left join architecturalstyletype using(architecturalstyletypeid)
+    left join buildingclasstype using(buildingclasstypeid)
+    left join heatingorsystemtype using(heatingorsystemtypeid)
+    left join propertylandusetype using(propertylandusetypeid)
+    left join storytype using(storytypeid)
+    left join typeconstructiontype using(typeconstructiontypeid)
+    where latitude is not null and longitude is not null
+    '''
+    
+    df = pd.read_sql(sql_query, sql_connect('zillow'))
+    
+    
+    ## filtering for properties that single residential properties
+    df = df[df['propertylandusetypeid'] == 261]
+    
+    ##getting rid of duplicate columns
+    df= df.loc[:, ~df.columns.duplicated()]
+    
+    ## drop duplicate parcelids keeping the latest transaction from 2017
+    df = df.sort_values('transactiondate').drop_duplicates('parcelid',keep='last') 
+    
+    return df 
+
+
+###################### Function To Get County Names ###########################
+
+
+def get_counties(df):
+    '''
+    This function will create dummy variables out of the original fips column. 
+    And return a dataframe with all of the original columns except regionidcounty.
+    We will keep fips column for data validation after making changes. 
+    New columns added will be 'LA', 'Orange', and 'Ventura' which are boolean 
+    The fips ids are renamed to be the name of the county each represents. 
+    '''
+    ## Making county column based on fips column using the associated ID's
+
+    df['county'] = df['fips'].map({6037: 'Los Angeles', 
+                                             6059: 'Orange', 
+                                             6111: 'Ventura'})
+    return df
+
+###################### Function To Create More features ###########################
+
+
+def create_features(df):
+    '''
+    Compute new features out of existing features in order to reduce noise, capture signals, 
+    and reduce collinearity, or dependence between independent variables.
+    
+    features computed:
+    age
+    age_bin
+    taxrate
+    acres
+    acres_bin
+    sqft_bin
+    bed_bath_ratio
+    '''
+    df['age'] = 2017 - df.yearbuilt
+    df['age_bin'] = pd.cut(df.age, 
+                           bins = [0, 5, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120,
+                                   130,140],
+                           labels = [0, .066, .133, .20, .266, .333, .40, .466, .533, 
+                                     .60, .666, .733, .8, .866, .933])
+
+    # create taxrate variable
+    df['taxrate'] = df.taxamount/df.taxvaluedollarcnt*100
+
+    # create acres variable
+    df['acres'] = df.lotsizesquarefeet/43560
+
+    # bin acres
+    df['acres_bin'] = pd.cut(df.acres, bins = [0, .10, .15, .25, .5, 1, 5, 10, 20, 50, 200],
+                       labels = [0, .1, .2, .3, .4, .5, .6, .7, .8, .9])
+
+    # square feet bin
+    df['sqft_bin'] = pd.cut(df.calculatedfinishedsquarefeet, 
+                            bins = [0, 800, 1000, 1250, 1500, 2000, 2500, 3000, 4000, 7000,
+                                    12000],
+                            labels = [0, .1, .2, .3, .4, .5, .6, .7, .8, .9])
+
+
+    # update datatypes of binned values to be float
+    df = df.astype({'sqft_bin': 'float64', 'acres_bin': 'float64', 'age_bin': 'float64',})
+
+
+    # ratio of bathrooms to bedrooms
+    df['bath_bed_ratio'] = df.bathroomcnt/df.bedroomcnt
+
+    return df
+
